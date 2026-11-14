@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SEEN_FILE = "seen_alerts.json"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
 
 CRITICAL_KEYWORDS = [
     "ground stop", "explosion", "refinery", "pipeline", "active shooter",
@@ -43,6 +46,7 @@ def classify_severity(text):
 
 def send_discord_alert(webhook_url, title, description, url, sector, severity_label, color):
     if not webhook_url:
+        print(f"[SKIP] Missing webhook URL for {sector}")
         return
     payload = {
         "username": "GSOC Intelligence Desk",
@@ -61,10 +65,34 @@ def send_discord_alert(webhook_url, title, description, url, sector, severity_la
             }
         ]
     }
-    res = requests.post(webhook_url, json=payload)
+    res = requests.post(webhook_url.strip(), json=payload)
     if res.status_code not in (200, 204):
-        print(f"Webhook error ({sector}): {res.status_code} - {res.text}")
+        print(f"[ERROR] Webhook failed ({sector}): {res.status_code} - {res.text}")
+    else:
+        print(f"[DELIVERED] {sector}: {title}")
     time.sleep(1.5)
+
+def verify_all_webhooks(seen):
+    # Fires once per channel on initial setup to prove all 4 webhooks work
+    channels = [
+        ("WEBHOOK_HOUSTON", "Houston & Gulf Coast Watch"),
+        ("WEBHOOK_AVIATION", "Aviation & FAA Airspace"),
+        ("WEBHOOK_ENERGY", "Energy & Oil/Gas"),
+        ("WEBHOOK_CYBER", "Cyber Threat Intel")
+    ]
+    for env_key, label in channels:
+        init_id = f"INIT-CHECK-{env_key}"
+        if init_id not in seen:
+            send_discord_alert(
+                webhook_url=os.getenv(env_key),
+                title=f"✅ Channel Online: {label}",
+                description="Webhook connection verified. Live OSINT monitoring is active for this vertical.",
+                url=None,
+                sector=label,
+                severity_label="🟢 ONLINE",
+                color=3066993
+            )
+            seen.add(init_id)
 
 def check_faa_nas(seen):
     webhook = os.getenv("WEBHOOK_AVIATION")
@@ -72,8 +100,9 @@ def check_faa_nas(seen):
     faa_url = "https://faa.gov"
 
     try:
-        resp = requests.get(faa_url, timeout=15)
+        resp = requests.get(faa_url, headers=HEADERS, timeout=15)
         if resp.status_code != 200:
+            print(f"[WARN] FAA returned status {resp.status_code}")
             return
         root = ET.fromstring(resp.content)
 
@@ -92,9 +121,8 @@ def check_faa_nas(seen):
                         sev, col = classify_severity(f"{dtype_name} {reason}")
                         send_discord_alert(webhook, title, desc, "https://faa.gov", "Aviation / FAA", sev, col)
                         seen.add(alert_id)
-                        print(f"[SENT] FAA Alert: {title}")
     except Exception as e:
-        print(f"FAA parser error: {e}")
+        print(f"[ERROR] FAA parser: {e}")
 
 def check_rss_feeds(seen):
     feeds = [
@@ -128,8 +156,11 @@ def check_rss_feeds(seen):
 
     for feed_cfg in feeds:
         try:
-            parsed = feedparser.parse(feed_cfg["url"])
-            for entry in parsed.entries[:5]:
+            resp = requests.get(feed_cfg["url"], headers=HEADERS, timeout=15)
+            parsed = feedparser.parse(resp.content)
+            print(f"[FEED] {feed_cfg['sector']}: fetched {len(parsed.entries)} entries")
+
+            for entry in parsed.entries[:3]:
                 alert_id = entry.get("id", entry.get("link"))
                 if not alert_id or alert_id in seen:
                     continue
@@ -154,13 +185,13 @@ def check_rss_feeds(seen):
                     color=col
                 )
                 seen.add(alert_id)
-                print(f"[SENT] {feed_cfg['sector']}: {title}")
         except Exception as e:
-            print(f"Feed error ({feed_cfg['sector']}): {e}")
+            print(f"[ERROR] Feed ({feed_cfg['sector']}): {e}")
 
 if __name__ == "__main__":
     print("Starting GSOC Intelligence Cycle...")
     seen_alerts = load_seen()
+    verify_all_webhooks(seen_alerts)
     check_faa_nas(seen_alerts)
     check_rss_feeds(seen_alerts)
     save_seen(seen_alerts)
