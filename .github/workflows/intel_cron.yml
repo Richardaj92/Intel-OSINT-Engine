@@ -25,10 +25,7 @@ jobs:
 
       - name: Run Threat Intel Engine
         env:
-          WEBHOOK_HOUSTON: ${{ secrets.WEBHOOK_HOUSTON }}
-          WEBHOOK_AVIATION: ${{ secrets.WEBHOOK_AVIATION }}
-          WEBHOOK_ENERGY: ${{ secrets.WEBHOOK_ENERGY }}
-          WEBHOOK_CYBER: ${{ secrets.WEBHOOK_CYBER }}
+          WEBHOOK_MAIN: ${{ secrets.WEBHOOK_MAIN }}
         run: python intel_engine.py
 
       - name: Save seen alerts state
