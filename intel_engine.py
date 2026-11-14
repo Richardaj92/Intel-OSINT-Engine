@@ -19,12 +19,13 @@ HEADERS = {
 CRITICAL_KEYWORDS = [
     "ground stop", "explosion", "refinery", "pipeline", "active shooter",
     "shelter in place", "hurricane", "tornado warning", "zero-day", "ransomware",
-    "blackout", "grid failure", "chemical release", "hazmat", "closure"
+    "blackout", "grid failure", "chemical release", "hazmat", "all lanes blocked",
+    "freeway closed", "high water"
 ]
 HIGH_KEYWORDS = [
     "ground delay", "severe thunderstorm", "flash flood", "outage", "cyberattack",
     "breach", "opec", "tanker", "strait of hormuz", "gulf coast", "ship channel",
-    "emergency", "evacuation", "faa"
+    "emergency", "evacuation", "faa", "heavy truck", "multi-vehicle"
 ]
 
 def load_seen():
@@ -52,7 +53,7 @@ def send_discord_alert(title, description, url, sector, severity_label, color):
         return
 
     payload = {
-        "username": "OverWatch Intel",
+        "username": "Overwatch Intel",  # <-- Change this to your favorite name!
         "embeds": [
             {
                 "title": title[:250],
@@ -63,7 +64,7 @@ def send_discord_alert(title, description, url, sector, severity_label, color):
                     {"name": "Severity", "value": severity_label, "inline": True},
                     {"name": "Sector", "value": sector, "inline": True}
                 ],
-                "footer": {"text": "Gulf Coast GSOC • Automated OSINT"},
+                "footer": {"text": "Overwatch OSINT • Houston & DMV Desk"},
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
         ]
@@ -75,21 +76,9 @@ def send_discord_alert(title, description, url, sector, severity_label, color):
         print(f"[DELIVERED] {sector}: {title}")
     time.sleep(1.5)
 
-def verify_main_webhook(seen):
-    init_id = "INIT-CHECK-WEBHOOK_MAIN"
-    if init_id not in seen:
-        send_discord_alert(
-            title="✅ GSOC Daily News Intel Feed Online",
-            description="Single-stream OSINT pipeline verified. Monitoring Houston Local, FAA Airspace, Energy/Oil & Gas, and Cyber Threats.",
-            url=None,
-            sector="System Health",
-            severity_label="🟢 ONLINE",
-            color=3066993
-        )
-        seen.add(init_id)
-
+# 1. FAA NAS AIRSPACE (Houston + DMV + Major Hubs)
 def check_faa_nas(seen):
-    target_airports = {"IAH", "HOU", "DFW", "AUS", "JFK", "LAX", "ORD", "ATL"}
+    target_airports = {"IAH", "HOU", "DCA", "IAD", "BWI", "DFW", "JFK", "LAX", "ORD", "ATL"}
     faa_url = "https://faa.gov"
 
     try:
@@ -116,8 +105,46 @@ def check_faa_nas(seen):
     except Exception as e:
         print(f"[ERROR] FAA parser: {e}")
 
+# 2. HOUSTON TRANSTAR MAJOR INCIDENTS (Filtered for high-impact closures/hazmat)
+def check_houston_transtar(seen):
+    transtar_url = "https://houstontranstar.org"
+    major_triggers = ["hazmat", "heavy truck", "all lanes", "high water", "fire", "fatality", "overturned", "closure"]
+
+    try:
+        resp = requests.get(transtar_url, headers=HEADERS, timeout=15)
+        if resp.status_code != 200:
+            return
+        root = ET.fromstring(resp.content)
+
+        for inc in root.findall(".//Incident"):
+            inc_id = inc.findtext("ID", "")
+            road = inc.findtext("Roadway", "Houston Roadway")
+            cross = inc.findtext("CrossStreet", "")
+            inc_type = inc.findtext("Type", "Incident")
+            lanes = inc.findtext("LanesAffected", "")
+            status = inc.findtext("Status", "")
+
+            if "cleared" in status.lower():
+                continue
+
+            blob = f"{inc_type} {lanes}".lower()
+            if not any(t in blob for t in major_triggers):
+                continue
+
+            alert_id = f"TRANSTAR-{inc_id}-{lanes}"
+            if alert_id not in seen:
+                title = f"TranStar Major Incident: {road} at {cross}"
+                desc = f"**Type:** {inc_type}\n**Impact:** {lanes}\n**Status:** {status}"
+                sev, col = classify_severity(blob)
+                send_discord_alert(title, desc, "https://traffic.houstontranstar.org/", "Houston TranStar", sev, col)
+                seen.add(alert_id)
+    except Exception as e:
+        print(f"[ERROR] TranStar parser: {e}")
+
+# 3. RSS FEEDS (Houston, DMV, Energy, Cyber)
 def check_rss_feeds(seen):
     feeds = [
+        # CYBER
         {
             "url": "https://cisa.gov",
             "sector": "Cyber / CISA"
@@ -126,10 +153,12 @@ def check_rss_feeds(seen):
             "url": "https://bleepingcomputer.com",
             "sector": "Cyber / Threat Intel"
         },
+        # ENERGY / OIL & GAS
         {
             "url": "https://oilprice.com",
             "sector": "Energy & Oil/Gas"
         },
+        # HOUSTON WEATHER & LOCAL NEWS
         {
             "url": "https://weather.gov",
             "sector": "Houston / NWS Weather",
@@ -138,6 +167,25 @@ def check_rss_feeds(seen):
         {
             "url": "https://click2houston.com",
             "sector": "Houston Local News"
+        },
+        # DMV (DC / MARYLAND / VIRGINIA) NEWS & WEATHER
+        {
+            "url": "https://wtop.com",
+            "sector": "DMV Local News"
+        },
+        {
+            "url": "https://weather.gov",
+            "sector": "DMV / NWS Weather"
+        },
+        {
+            "url": "https://weather.gov",
+            "sector": "DMV / NWS Weather",
+            "filter_keywords": ["Montgomery", "Prince George", "Howard", "Anne Arundel", "Charles", "Frederick"]
+        },
+        {
+            "url": "https://weather.gov",
+            "sector": "DMV / NWS Weather",
+            "filter_keywords": ["Fairfax", "Arlington", "Alexandria", "Loudoun", "Prince William"]
         }
     ]
 
@@ -176,8 +224,8 @@ def check_rss_feeds(seen):
 if __name__ == "__main__":
     print("Starting GSOC Intelligence Cycle...")
     seen_alerts = load_seen()
-    verify_main_webhook(seen_alerts)
     check_faa_nas(seen_alerts)
+    check_houston_transtar(seen_alerts)
     check_rss_feeds(seen_alerts)
     save_seen(seen_alerts)
     print("Cycle complete.")
