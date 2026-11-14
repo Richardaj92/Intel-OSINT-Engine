@@ -73,7 +73,6 @@ def send_discord_alert(webhook_url, title, description, url, sector, severity_la
     time.sleep(1.5)
 
 def verify_all_webhooks(seen):
-    # Fires once per channel on initial setup to prove all 4 webhooks work
     channels = [
         ("WEBHOOK_HOUSTON", "Houston & Gulf Coast Watch"),
         ("WEBHOOK_AVIATION", "Aviation & FAA Airspace"),
