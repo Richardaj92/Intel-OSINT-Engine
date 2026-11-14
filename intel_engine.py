@@ -271,4 +271,3 @@ def check_rss_feeds(seen):
         {
             "url": "https://weather.gov",
             "sector": "DMV Weather",
-            "source": "NWS Virginia",
