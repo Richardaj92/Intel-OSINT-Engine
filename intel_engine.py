@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SEEN_FILE = "seen_alerts.json"
+MAIN_WEBHOOK = os.getenv("WEBHOOK_MAIN", "").strip()
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -44,10 +46,11 @@ def classify_severity(text):
         return "🟠 HIGH", 15105570
     return "🔵 MONITOR", 3447003
 
-def send_discord_alert(webhook_url, title, description, url, sector, severity_label, color):
-    if not webhook_url:
-        print(f"[SKIP] Missing webhook URL for {sector}")
+def send_discord_alert(title, description, url, sector, severity_label, color):
+    if not MAIN_WEBHOOK or not MAIN_WEBHOOK.startswith("http"):
+        print("[ERROR] Missing or invalid WEBHOOK_MAIN secret.")
         return
+
     payload = {
         "username": "GSOC Intelligence Desk",
         "embeds": [
@@ -65,43 +68,33 @@ def send_discord_alert(webhook_url, title, description, url, sector, severity_la
             }
         ]
     }
-    res = requests.post(webhook_url.strip(), json=payload)
+    res = requests.post(MAIN_WEBHOOK, json=payload)
     if res.status_code not in (200, 204):
         print(f"[ERROR] Webhook failed ({sector}): {res.status_code} - {res.text}")
     else:
         print(f"[DELIVERED] {sector}: {title}")
     time.sleep(1.5)
 
-def verify_all_webhooks(seen):
-    channels = [
-        ("WEBHOOK_HOUSTON", "Houston & Gulf Coast Watch"),
-        ("WEBHOOK_AVIATION", "Aviation & FAA Airspace"),
-        ("WEBHOOK_ENERGY", "Energy & Oil/Gas"),
-        ("WEBHOOK_CYBER", "Cyber Threat Intel")
-    ]
-    for env_key, label in channels:
-        init_id = f"INIT-CHECK-{env_key}"
-        if init_id not in seen:
-            send_discord_alert(
-                webhook_url=os.getenv(env_key),
-                title=f"✅ Channel Online: {label}",
-                description="Webhook connection verified. Live OSINT monitoring is active for this vertical.",
-                url=None,
-                sector=label,
-                severity_label="🟢 ONLINE",
-                color=3066993
-            )
-            seen.add(init_id)
+def verify_main_webhook(seen):
+    init_id = "INIT-CHECK-WEBHOOK_MAIN"
+    if init_id not in seen:
+        send_discord_alert(
+            title="✅ GSOC Daily News Intel Feed Online",
+            description="Single-stream OSINT pipeline verified. Monitoring Houston Local, FAA Airspace, Energy/Oil & Gas, and Cyber Threats.",
+            url=None,
+            sector="System Health",
+            severity_label="🟢 ONLINE",
+            color=3066993
+        )
+        seen.add(init_id)
 
 def check_faa_nas(seen):
-    webhook = os.getenv("WEBHOOK_AVIATION")
     target_airports = {"IAH", "HOU", "DFW", "AUS", "JFK", "LAX", "ORD", "ATL"}
     faa_url = "https://faa.gov"
 
     try:
         resp = requests.get(faa_url, headers=HEADERS, timeout=15)
         if resp.status_code != 200:
-            print(f"[WARN] FAA returned status {resp.status_code}")
             return
         root = ET.fromstring(resp.content)
 
@@ -118,7 +111,7 @@ def check_faa_nas(seen):
                         title = f"FAA {dtype_name}: {arpt}"
                         desc = f"**Airport:** {arpt}\n**Reason:** {reason}\n**Duration/Max:** {end_time}"
                         sev, col = classify_severity(f"{dtype_name} {reason}")
-                        send_discord_alert(webhook, title, desc, "https://faa.gov", "Aviation / FAA", sev, col)
+                        send_discord_alert(title, desc, "https://faa.gov", "Aviation / FAA", sev, col)
                         seen.add(alert_id)
     except Exception as e:
         print(f"[ERROR] FAA parser: {e}")
@@ -127,28 +120,23 @@ def check_rss_feeds(seen):
     feeds = [
         {
             "url": "https://cisa.gov",
-            "webhook": os.getenv("WEBHOOK_CYBER"),
             "sector": "Cyber / CISA"
         },
         {
             "url": "https://bleepingcomputer.com",
-            "webhook": os.getenv("WEBHOOK_CYBER"),
             "sector": "Cyber / Threat Intel"
         },
         {
             "url": "https://oilprice.com",
-            "webhook": os.getenv("WEBHOOK_ENERGY"),
             "sector": "Energy & Oil/Gas"
         },
         {
             "url": "https://weather.gov",
-            "webhook": os.getenv("WEBHOOK_HOUSTON"),
             "sector": "Houston / NWS Weather",
             "filter_keywords": ["Harris", "Chambers", "Galveston", "Brazoria", "Fort Bend", "Houston", "Baytown", "Ship Channel"]
         },
         {
             "url": "https://click2houston.com",
-            "webhook": os.getenv("WEBHOOK_HOUSTON"),
             "sector": "Houston Local News"
         }
     ]
@@ -157,7 +145,6 @@ def check_rss_feeds(seen):
         try:
             resp = requests.get(feed_cfg["url"], headers=HEADERS, timeout=15)
             parsed = feedparser.parse(resp.content)
-            print(f"[FEED] {feed_cfg['sector']}: fetched {len(parsed.entries)} entries")
 
             for entry in parsed.entries[:3]:
                 alert_id = entry.get("id", entry.get("link"))
@@ -175,7 +162,6 @@ def check_rss_feeds(seen):
 
                 sev, col = classify_severity(f"{title} {summary}")
                 send_discord_alert(
-                    webhook_url=feed_cfg["webhook"],
                     title=title,
                     description=summary,
                     url=link,
@@ -190,7 +176,7 @@ def check_rss_feeds(seen):
 if __name__ == "__main__":
     print("Starting GSOC Intelligence Cycle...")
     seen_alerts = load_seen()
-    verify_all_webhooks(seen_alerts)
+    verify_main_webhook(seen_alerts)
     check_faa_nas(seen_alerts)
     check_rss_feeds(seen_alerts)
     save_seen(seen_alerts)
