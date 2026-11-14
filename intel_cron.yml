@@ -1,0 +1,39 @@
+name: GSOC 24/7 Threat Intel Runner
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-intel-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Threat Intel Engine
+        env:
+          WEBHOOK_HOUSTON: ${{ secrets.WEBHOOK_HOUSTON }}
+          WEBHOOK_AVIATION: ${{ secrets.WEBHOOK_AVIATION }}
+          WEBHOOK_ENERGY: ${{ secrets.WEBHOOK_ENERGY }}
+          WEBHOOK_CYBER: ${{ secrets.WEBHOOK_CYBER }}
+        run: python intel_engine.py
+
+      - name: Save seen alerts state
+        run: |
+          git config user.name "GSOC Bot"
+          git config user.email "bot@://github.com"
+          git add seen_alerts.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update seen alerts state" && git push)
