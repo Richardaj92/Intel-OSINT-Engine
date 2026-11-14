@@ -1,4 +1,6 @@
 import os
+import re
+import html
 import json
 import time
 import requests
@@ -16,16 +18,26 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
+# High-signal severity triggers
 CRITICAL_KEYWORDS = [
     "ground stop", "explosion", "refinery", "pipeline", "active shooter",
     "shelter in place", "hurricane", "tornado warning", "zero-day", "ransomware",
     "blackout", "grid failure", "chemical release", "hazmat", "all lanes blocked",
-    "freeway closed", "high water"
+    "freeway closed", "high water", "missile", "airstrike", "state of emergency"
 ]
 HIGH_KEYWORDS = [
     "ground delay", "severe thunderstorm", "flash flood", "outage", "cyberattack",
     "breach", "opec", "tanker", "strait of hormuz", "gulf coast", "ship channel",
-    "emergency", "evacuation", "faa", "heavy truck", "multi-vehicle"
+    "emergency", "evacuation", "faa", "heavy truck", "shooting", "stabbing",
+    "indictment", "sanctions", "vulnerability", "exploit"
+]
+
+# Noise blockers to filter out sports, entertainment, and promotional clutter
+NOISE_BLOCKLIST = [
+    "astros", "texans", "rockets", "dynamo", "commanders", "capitals", "wizards",
+    "nationals", "nfl", "nba", "mlb", "nhl", "touchdown", "playoffs", "rodeo",
+    "celebrity", "kardashian", "movie review", "box office", "recipe", "horoscope",
+    "best deals", "black friday", "cyber monday", "sponsored"
 ]
 
 def load_seen():
@@ -35,9 +47,22 @@ def load_seen():
     return set()
 
 def save_seen(seen_set):
-    trimmed = list(seen_set)[-500:]
+    trimmed = list(seen_set)[-600:]
     with open(SEEN_FILE, "w") as f:
         json.dump(trimmed, f, indent=2)
+
+def clean_text(raw_text):
+    if not raw_text:
+        return "No summary provided."
+    # Remove HTML tags and decode HTML entities
+    no_html = re.sub(r"<[^>]+>", " ", raw_text)
+    decoded = html.unescape(no_html)
+    cleaned = re.sub(r"\s+", " ", decoded).strip()
+    return cleaned if cleaned else "No summary provided."
+
+def is_noise(text):
+    text_lower = text.lower()
+    return any(bad in text_lower for bad in NOISE_BLOCKLIST)
 
 def classify_severity(text):
     text_lower = text.lower()
@@ -47,33 +72,38 @@ def classify_severity(text):
         return "🟠 HIGH", 15105570
     return "🔵 MONITOR", 3447003
 
-def send_discord_alert(title, description, url, sector, severity_label, color):
+def send_discord_alert(title, description, url, sector, source_name, severity_label, color):
     if not MAIN_WEBHOOK or not MAIN_WEBHOOK.startswith("http"):
         print("[ERROR] Missing or invalid WEBHOOK_MAIN secret.")
         return
 
+    clean_desc = clean_text(description)
+    if len(clean_desc) > 420:
+        clean_desc = clean_desc[:417] + "..."
+
     payload = {
-        "username": "Overwatch Intel",  # <-- Change this to your favorite name!
+        "username": "Overwatch Intel",
         "embeds": [
             {
-                "title": title[:250],
+                "title": clean_text(title)[:250],
                 "url": url if url else None,
-                "description": description[:450] + ("..." if len(description) > 450 else ""),
+                "description": clean_desc,
                 "color": color,
                 "fields": [
                     {"name": "Severity", "value": severity_label, "inline": True},
-                    {"name": "Sector", "value": sector, "inline": True}
+                    {"name": "Sector", "value": sector, "inline": True},
+                    {"name": "Source", "value": source_name, "inline": True}
                 ],
-                "footer": {"text": "Overwatch OSINT • Houston & DMV Desk"},
+                "footer": {"text": "Overwatch Intel • Verified OSINT"},
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
         ]
     }
     res = requests.post(MAIN_WEBHOOK, json=payload)
     if res.status_code not in (200, 204):
-        print(f"[ERROR] Webhook failed ({sector}): {res.status_code} - {res.text}")
+        print(f"[ERROR] Webhook failed ({source_name}): {res.status_code} - {res.text}")
     else:
-        print(f"[DELIVERED] {sector}: {title}")
+        print(f"[DELIVERED] [{source_name}] {title}")
     time.sleep(1.5)
 
 # 1. FAA NAS AIRSPACE (Houston + DMV + Major Hubs)
@@ -98,14 +128,22 @@ def check_faa_nas(seen):
 
                     if alert_id not in seen:
                         title = f"FAA {dtype_name}: {arpt}"
-                        desc = f"**Airport:** {arpt}\n**Reason:** {reason}\n**Duration/Max:** {end_time}"
+                        desc = f"Airport: {arpt} | Reason: {reason} | Duration/Max: {end_time}"
                         sev, col = classify_severity(f"{dtype_name} {reason}")
-                        send_discord_alert(title, desc, "https://faa.gov", "Aviation / FAA", sev, col)
+                        send_discord_alert(
+                            title=title,
+                            description=desc,
+                            url="https://faa.gov",
+                            sector="Aviation",
+                            source_name="FAA NAS",
+                            severity_label=sev,
+                            color=col
+                        )
                         seen.add(alert_id)
     except Exception as e:
         print(f"[ERROR] FAA parser: {e}")
 
-# 2. HOUSTON TRANSTAR MAJOR INCIDENTS (Filtered for high-impact closures/hazmat)
+# 2. HOUSTON TRANSTAR MAJOR INCIDENTS (High-impact closures/hazmat only)
 def check_houston_transtar(seen):
     transtar_url = "https://houstontranstar.org"
     major_triggers = ["hazmat", "heavy truck", "all lanes", "high water", "fire", "fatality", "overturned", "closure"]
@@ -133,99 +171,89 @@ def check_houston_transtar(seen):
 
             alert_id = f"TRANSTAR-{inc_id}-{lanes}"
             if alert_id not in seen:
-                title = f"TranStar Major Incident: {road} at {cross}"
-                desc = f"**Type:** {inc_type}\n**Impact:** {lanes}\n**Status:** {status}"
+                title = f"Major Incident: {road} at {cross}"
+                desc = f"Type: {inc_type} | Impact: {lanes} | Status: {status}"
                 sev, col = classify_severity(blob)
-                send_discord_alert(title, desc, "https://traffic.houstontranstar.org/", "Houston TranStar", sev, col)
-                seen.add(alert_id)
-    except Exception as e:
-        print(f"[ERROR] TranStar parser: {e}")
-
-# 3. RSS FEEDS (Houston, DMV, Energy, Cyber)
-def check_rss_feeds(seen):
-    feeds = [
-        # CYBER
-        {
-            "url": "https://cisa.gov",
-            "sector": "Cyber / CISA"
-        },
-        {
-            "url": "https://bleepingcomputer.com",
-            "sector": "Cyber / Threat Intel"
-        },
-        # ENERGY / OIL & GAS
-        {
-            "url": "https://oilprice.com",
-            "sector": "Energy & Oil/Gas"
-        },
-        # HOUSTON WEATHER & LOCAL NEWS
-        {
-            "url": "https://weather.gov",
-            "sector": "Houston / NWS Weather",
-            "filter_keywords": ["Harris", "Chambers", "Galveston", "Brazoria", "Fort Bend", "Houston", "Baytown", "Ship Channel"]
-        },
-        {
-            "url": "https://click2houston.com",
-            "sector": "Houston Local News"
-        },
-        # DMV (DC / MARYLAND / VIRGINIA) NEWS & WEATHER
-        {
-            "url": "https://wtop.com",
-            "sector": "DMV Local News"
-        },
-        {
-            "url": "https://weather.gov",
-            "sector": "DMV / NWS Weather"
-        },
-        {
-            "url": "https://weather.gov",
-            "sector": "DMV / NWS Weather",
-            "filter_keywords": ["Montgomery", "Prince George", "Howard", "Anne Arundel", "Charles", "Frederick"]
-        },
-        {
-            "url": "https://weather.gov",
-            "sector": "DMV / NWS Weather",
-            "filter_keywords": ["Fairfax", "Arlington", "Alexandria", "Loudoun", "Prince William"]
-        }
-    ]
-
-    for feed_cfg in feeds:
-        try:
-            resp = requests.get(feed_cfg["url"], headers=HEADERS, timeout=15)
-            parsed = feedparser.parse(resp.content)
-
-            for entry in parsed.entries[:3]:
-                alert_id = entry.get("id", entry.get("link"))
-                if not alert_id or alert_id in seen:
-                    continue
-
-                title = entry.get("title", "Breaking Alert")
-                summary = entry.get("summary", "No summary provided.")
-                link = entry.get("link", "")
-
-                if "filter_keywords" in feed_cfg:
-                    blob = f"{title} {summary}".lower()
-                    if not any(kw.lower() in blob for kw in feed_cfg["filter_keywords"]):
-                        continue
-
-                sev, col = classify_severity(f"{title} {summary}")
                 send_discord_alert(
                     title=title,
-                    description=summary,
-                    url=link,
-                    sector=feed_cfg["sector"],
+                    description=desc,
+                    url="https://houstontranstar.org",
+                    sector="Houston Traffic",
+                    source_name="Houston TranStar",
                     severity_label=sev,
                     color=col
                 )
                 seen.add(alert_id)
-        except Exception as e:
-            print(f"[ERROR] Feed ({feed_cfg['sector']}): {e}")
+    except Exception as e:
+        print(f"[ERROR] TranStar parser: {e}")
 
-if __name__ == "__main__":
-    print("Starting GSOC Intelligence Cycle...")
-    seen_alerts = load_seen()
-    check_faa_nas(seen_alerts)
-    check_houston_transtar(seen_alerts)
-    check_rss_feeds(seen_alerts)
-    save_seen(seen_alerts)
-    print("Cycle complete.")
+# 3. HIGH-SIGNAL RSS FEEDS (Reuters, AP, Al Jazeera, KHOU11, NBC4, Cyber, Energy)
+def check_rss_feeds(seen):
+    feeds = [
+        # GLOBAL BREAKING WIRES
+        {
+            "url": "https://google.com",
+            "sector": "Global Breaking",
+            "source": "Reuters",
+            "limit": 3
+        },
+        {
+            "url": "https://google.com",
+            "sector": "Global Breaking",
+            "source": "Associated Press",
+            "limit": 3
+        },
+        {
+            "url": "https://aljazeera.com",
+            "sector": "Global Breaking",
+            "source": "Al Jazeera",
+            "limit": 3
+        },
+        # CYBER THREAT INTEL
+        {
+            "url": "https://cisa.gov",
+            "sector": "Cyber Intel",
+            "source": "CISA",
+            "limit": 3
+        },
+        {
+            "url": "https://bleepingcomputer.com",
+            "sector": "Cyber Intel",
+            "source": "BleepingComputer",
+            "limit": 3
+        },
+        {
+            "url": "https://feedburner.com",
+            "sector": "Cyber Intel",
+            "source": "The Hacker News",
+            "limit": 2
+        },
+        # ENERGY & OIL/GAS
+        {
+            "url": "https://oilprice.com",
+            "sector": "Energy & Oil/Gas",
+            "source": "OilPrice.com",
+            "limit": 3
+        },
+        # HOUSTON LOCAL (KHOU 11 + NWS GREATER HOUSTON)
+        {
+            "url": "https://khou.com",
+            "sector": "Houston Local",
+            "source": "KHOU 11",
+            "limit": 3
+        },
+        {
+            "url": "https://weather.gov",
+            "sector": "Houston Weather",
+            "source": "NWS Houston",
+            "filter_keywords": ["Harris", "Chambers", "Galveston", "Brazoria", "Fort Bend", "Houston", "Baytown", "Ship Channel"],
+            "limit": 5
+        },
+        # DMV LOCAL (NBC4 WASHINGTON + NWS DC/MD/VA)
+        {
+            "url": "https://nbcwashington.com",
+            "sector": "DMV Local",
+            "source": "NBC4 Washington",
+            "limit": 3
+        },
+        {
