@@ -18,13 +18,13 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-# High-signal severity triggers
 CRITICAL_KEYWORDS = [
     "ground stop", "explosion", "refinery", "pipeline", "active shooter",
     "shelter in place", "hurricane", "tornado warning", "zero-day", "ransomware",
     "blackout", "grid failure", "chemical release", "hazmat", "all lanes blocked",
     "freeway closed", "high water", "missile", "airstrike", "state of emergency"
 ]
+
 HIGH_KEYWORDS = [
     "ground delay", "severe thunderstorm", "flash flood", "outage", "cyberattack",
     "breach", "opec", "tanker", "strait of hormuz", "gulf coast", "ship channel",
@@ -32,7 +32,6 @@ HIGH_KEYWORDS = [
     "indictment", "sanctions", "vulnerability", "exploit"
 ]
 
-# Noise blockers to filter out sports, entertainment, and promotional clutter
 NOISE_BLOCKLIST = [
     "astros", "texans", "rockets", "dynamo", "commanders", "capitals", "wizards",
     "nationals", "nfl", "nba", "mlb", "nhl", "touchdown", "playoffs", "rodeo",
@@ -40,29 +39,33 @@ NOISE_BLOCKLIST = [
     "best deals", "black friday", "cyber monday", "sponsored"
 ]
 
+
 def load_seen():
     if os.path.exists(SEEN_FILE):
         with open(SEEN_FILE, "r") as f:
             return set(json.load(f))
     return set()
 
+
 def save_seen(seen_set):
     trimmed = list(seen_set)[-600:]
     with open(SEEN_FILE, "w") as f:
         json.dump(trimmed, f, indent=2)
 
+
 def clean_text(raw_text):
     if not raw_text:
         return "No summary provided."
-    # Remove HTML tags and decode HTML entities
     no_html = re.sub(r"<[^>]+>", " ", raw_text)
     decoded = html.unescape(no_html)
     cleaned = re.sub(r"\s+", " ", decoded).strip()
     return cleaned if cleaned else "No summary provided."
 
+
 def is_noise(text):
     text_lower = text.lower()
     return any(bad in text_lower for bad in NOISE_BLOCKLIST)
+
 
 def classify_severity(text):
     text_lower = text.lower()
@@ -71,6 +74,7 @@ def classify_severity(text):
     elif any(kw in text_lower for kw in HIGH_KEYWORDS):
         return "🟠 HIGH", 15105570
     return "🔵 MONITOR", 3447003
+
 
 def send_discord_alert(title, description, url, sector, source_name, severity_label, color):
     if not MAIN_WEBHOOK or not MAIN_WEBHOOK.startswith("http"):
@@ -106,7 +110,7 @@ def send_discord_alert(title, description, url, sector, source_name, severity_la
         print(f"[DELIVERED] [{source_name}] {title}")
     time.sleep(1.5)
 
-# 1. FAA NAS AIRSPACE (Houston + DMV + Major Hubs)
+
 def check_faa_nas(seen):
     target_airports = {"IAH", "HOU", "DCA", "IAD", "BWI", "DFW", "JFK", "LAX", "ORD", "ATL"}
     faa_url = "https://faa.gov"
@@ -143,7 +147,7 @@ def check_faa_nas(seen):
     except Exception as e:
         print(f"[ERROR] FAA parser: {e}")
 
-# 2. HOUSTON TRANSTAR MAJOR INCIDENTS (High-impact closures/hazmat only)
+
 def check_houston_transtar(seen):
     transtar_url = "https://houstontranstar.org"
     major_triggers = ["hazmat", "heavy truck", "all lanes", "high water", "fire", "fatality", "overturned", "closure"]
@@ -187,10 +191,9 @@ def check_houston_transtar(seen):
     except Exception as e:
         print(f"[ERROR] TranStar parser: {e}")
 
-# 3. HIGH-SIGNAL RSS FEEDS (Reuters, AP, Al Jazeera, KHOU11, NBC4, Cyber, Energy)
+
 def check_rss_feeds(seen):
     feeds = [
-        # GLOBAL BREAKING WIRES
         {
             "url": "https://google.com",
             "sector": "Global Breaking",
@@ -209,7 +212,6 @@ def check_rss_feeds(seen):
             "source": "Al Jazeera",
             "limit": 3
         },
-        # CYBER THREAT INTEL
         {
             "url": "https://cisa.gov",
             "sector": "Cyber Intel",
@@ -228,14 +230,12 @@ def check_rss_feeds(seen):
             "source": "The Hacker News",
             "limit": 2
         },
-        # ENERGY & OIL/GAS
         {
             "url": "https://oilprice.com",
             "sector": "Energy & Oil/Gas",
             "source": "OilPrice.com",
             "limit": 3
         },
-        # HOUSTON LOCAL (KHOU 11 + NWS GREATER HOUSTON)
         {
             "url": "https://khou.com",
             "sector": "Houston Local",
@@ -249,7 +249,6 @@ def check_rss_feeds(seen):
             "filter_keywords": ["Harris", "Chambers", "Galveston", "Brazoria", "Fort Bend", "Houston", "Baytown", "Ship Channel"],
             "limit": 5
         },
-        # DMV LOCAL (NBC4 WASHINGTON + NWS DC/MD/VA)
         {
             "url": "https://nbcwashington.com",
             "sector": "DMV Local",
@@ -257,3 +256,19 @@ def check_rss_feeds(seen):
             "limit": 3
         },
         {
+            "url": "https://weather.gov",
+            "sector": "DMV Weather",
+            "source": "NWS DC",
+            "limit": 3
+        },
+        {
+            "url": "https://weather.gov",
+            "sector": "DMV Weather",
+            "source": "NWS Maryland",
+            "filter_keywords": ["Montgomery", "Prince George", "Howard", "Anne Arundel", "Charles", "Frederick"],
+            "limit": 3
+        },
+        {
+            "url": "https://weather.gov",
+            "sector": "DMV Weather",
+            "source": "NWS Virginia",
