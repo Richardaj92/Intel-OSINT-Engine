@@ -52,7 +52,7 @@ def send_discord_alert(title, description, url, sector, severity_label, color):
         return
 
     payload = {
-        "username": "GSOC Intelligence Desk",
+        "username": "OverWatch Intel",
         "embeds": [
             {
                 "title": title[:250],
