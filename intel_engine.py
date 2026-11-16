@@ -46,21 +46,23 @@ def clean_text(value):
 
 
 def determine_link(feed_info, entry):
-    link = entry.get("link")
+    # The NWS feed can expose machine-oriented alert/CAP URLs. Link readers
+    # to the public-facing active alerts page instead.
+    feed_url = (feed_info or {}).get("url", "").lower()
+    feed_name = (feed_info or {}).get("name", "").lower()
+    if "weather.gov" in feed_url or "weather" in feed_name:
+        return "https://www.weather.gov/alerts"
 
+    link = entry.get("link")
     if isinstance(link, str) and link.startswith("http"):
         return link
 
-    url = (feed_info or {}).get("url", "")
-
-    if "weather.gov" in url:
-        return "https://www.weather.gov/"
-    if "cisa.gov" in url:
+    if "cisa.gov" in feed_url:
         return "https://www.cisa.gov/"
-    if "fema.gov" in url:
+    if "fema.gov" in feed_url:
         return "https://www.fema.gov/"
 
-    return url
+    return (feed_info or {}).get("url", "")
 
 
 def classify_severity(text):
@@ -150,8 +152,8 @@ def send_alert(title, summary, link, sector, source):
 
 
 def process_feed(feed_info, seen):
+    feed_name = feed_info.get("name", "Unknown Feed")
     try:
-        feed_name = feed_info.get("name", "Unknown Feed")
         feed_url = feed_info.get("url")
         print(f"[CHECKING] {feed_name} -> {feed_url}")
 
