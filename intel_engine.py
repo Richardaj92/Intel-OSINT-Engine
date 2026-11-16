@@ -28,6 +28,31 @@ FEEDS = [
         "url": "https://www.fema.gov/news/feed",
         "sector": "Emergency Management",
     },
+    {
+        "name": "ABC13 Houston Local News",
+        "url": "https://abc13.com/feed",
+        "sector": "Harris County, Texas",
+    },
+    {
+        "name": "KHOU Houston Local News",
+        "url": "https://www.khou.com/feeds/syndication/rss/news/local",
+        "sector": "Harris County, Texas",
+    },
+    {
+        "name": "KPRC Houston Local News",
+        "url": "https://www.click2houston.com/news/local/houston-news/?outputType=rss",
+        "sector": "Harris County, Texas",
+    },
+    {
+        "name": "Montgomery County, MD Government News",
+        "url": "https://www.montgomerycountymd.gov/news/rss.aspx",
+        "sector": "Montgomery County, Maryland",
+    },
+    {
+        "name": "Montgomery County, MD Police Releases",
+        "url": "https://www2.montgomerycountymd.gov/mcgportalapps/press_RSS.aspx?dept=Police",
+        "sector": "Montgomery County, Maryland",
+    },
 ]
 
 
