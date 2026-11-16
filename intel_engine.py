@@ -1,40 +1,119 @@
-# ==========================
-# SOURCE LINKS
-# ==========================
+import json
+import os
+import re
+from datetime import datetime, timezone
+from html import unescape
+
+import feedparser
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
+WEBHOOK_URL = os.getenv("WEBHOOK_MAIN") or os.getenv("WEBHOOK_URL")
+
+FEEDS = [
+    {
+        "name": "CISA Alerts",
+        "url": "https://www.cisa.gov/uscert/ncas/alerts.xml",
+        "sector": "Cybersecurity",
+    },
+    {
+        "name": "Weather Alerts",
+        "url": "https://alerts.weather.gov/cap/us.php?x=0",
+        "sector": "Weather",
+    },
+    {
+        "name": "FEMA News",
+        "url": "https://www.fema.gov/news/feed",
+        "sector": "Emergency Management",
+    },
+]
+
+
+def clean_text(value):
+    if value is None:
+        return ""
+
+    if not isinstance(value, str):
+        value = str(value)
+
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = unescape(value)
+    value = value.replace("\r", " ").replace("\n", " ")
+    value = " ".join(value.split())
+    return value.strip()
+
 
 def determine_link(feed_info, entry):
-
     link = entry.get("link")
 
-    if (
-        link
-        and isinstance(link, str)
-        and link.startswith("http")
-    ):
+    if isinstance(link, str) and link.startswith("http"):
         return link
 
-    if "weather.gov" in feed_info["url"]:
+    url = (feed_info or {}).get("url", "")
+
+    if "weather.gov" in url:
         return "https://www.weather.gov/"
-
-    if "cisa.gov" in feed_info["url"]:
+    if "cisa.gov" in url:
         return "https://www.cisa.gov/"
-
-    if "fema.gov" in feed_info["url"]:
+    if "fema.gov" in url:
         return "https://www.fema.gov/"
 
-    return feed_info["url"]
+    return url
 
 
-# ==========================
-# DISCORD ALERT
-# ==========================
+def classify_severity(text):
+    text = (text or "").lower()
+
+    if any(keyword in text for keyword in [
+        "evacuation",
+        "fatal",
+        "explosion",
+        "fire",
+        "emergency",
+        "severe",
+        "danger",
+    ]):
+        return "High", 0xFF0000
+
+    if any(keyword in text for keyword in [
+        "warning",
+        "alert",
+        "storm",
+        "outage",
+        "hazard",
+        "power",
+        "wind",
+    ]):
+        return "Medium", 0xFF9900
+
+    return "Low", 0x00AAFF
+
+
+def load_seen():
+    try:
+        with open("seen_alerts.json", "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+    if isinstance(data, dict):
+        return set(data.get("seen", []))
+
+    if isinstance(data, list):
+        return set(data)
+
+    return set()
+
+
+def save_seen(seen):
+    with open("seen_alerts.json", "w", encoding="utf-8") as file:
+        json.dump(sorted(seen), file, indent=2)
+
 
 def send_alert(title, summary, link, sector, source):
-
-    severity, color = classify_severity(
-        f"{title} {summary}"
-    )
-
+    severity, color = classify_severity(f"{title} {summary}")
     summary = clean_text(summary)
 
     if len(summary) > 1000:
@@ -42,163 +121,92 @@ def send_alert(title, summary, link, sector, source):
 
     payload = {
         "username": "Overwatch Intel",
-
-        "embeds": [
-            {
-                "title": f"🛰️ {title[:250]}",
-                "url": link,
-                "description": summary,
-                "color": color,
-
-                "fields": [
-                    {
-                        "name": "Severity",
-                        "value": severity,
-                        "inline": True
-                    },
-                    {
-                        "name": "Sector",
-                        "value": sector,
-                        "inline": True
-                    },
-                    {
-                        "name": "Source",
-                        "value": source,
-                        "inline": True
-                    }
-                ],
-
-                "footer": {
-                    "text": "Overwatch Intel • OSINT Monitoring"
-                },
-
-                "timestamp": datetime.now(
-                    timezone.utc
-                ).isoformat()
-            }
-        ]
+        "embeds": [{
+            "title": f"🛰️ {title[:250]}",
+            "url": link,
+            "description": summary or "No summary available.",
+            "color": color,
+            "fields": [
+                {"name": "Severity", "value": severity, "inline": True},
+                {"name": "Sector", "value": sector, "inline": True},
+                {"name": "Source", "value": source, "inline": True},
+            ],
+            "footer": {"text": "Overwatch Intel • OSINT Monitoring"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }],
     }
 
     try:
-
-        response = requests.post(
-            WEBHOOK_URL,
-            json=payload,
-            timeout=30
-        )
+        response = requests.post(WEBHOOK_URL, json=payload, timeout=30)
 
         if response.status_code in [200, 204]:
             print(f"[SUCCESS] {source}: {title}")
-
         else:
-            print(
-                f"[ERROR] Discord returned "
-                f"{response.status_code}"
-            )
+            print(f"[ERROR] Discord returned {response.status_code} for {source}")
+            print(response.text[:500])
 
-    except Exception as e:
+    except Exception as exc:
+        print(f"[WEBHOOK ERROR] {exc}")
 
-        print(
-            f"[WEBHOOK ERROR] {e}"
-        )
-
-
-# ==========================
-# FEED PROCESSING
-# ==========================
 
 def process_feed(feed_info, seen):
-
     try:
+        feed_name = feed_info.get("name", "Unknown Feed")
+        feed_url = feed_info.get("url")
+        print(f"[CHECKING] {feed_name} -> {feed_url}")
 
-        print(f"[CHECKING] {feed_info['name']}")
-
-        feed = feedparser.parse(
-            feed_info["url"]
-        )
+        feed = feedparser.parse(feed_url)
+        print(f"[DEBUG] {feed_name}: found {len(feed.entries)} entries")
 
         for entry in feed.entries[:10]:
-
-            article_id = (
-                entry.get("id")
-                or entry.get("link")
-                or entry.get("title")
-            )
-
+            article_id = entry.get("id") or entry.get("link") or entry.get("title")
             if not article_id:
                 continue
 
+            article_id = str(article_id)
             if article_id in seen:
                 continue
 
-            title = clean_text(
-                entry.get(
-                    "title",
-                    "Untitled Alert"
-                )
-            )
+            title = clean_text(entry.get("title", "Untitled Alert"))
 
-            summary = clean_text(
-                entry.get(
-                    "summary",
-                    "No summary available."
-                )
-            )
+            raw_summary = entry.get("summary")
+            if not raw_summary and entry.get("description"):
+                raw_summary = entry.get("description")
+            if not raw_summary:
+                summary_detail = entry.get("summary_detail") or {}
+                raw_summary = summary_detail.get("value") or "No summary available."
 
-            link = determine_link(
-                feed_info,
-                entry
-            )
+            summary = clean_text(raw_summary)
+            link = determine_link(feed_info, entry)
 
             send_alert(
                 title=title,
                 summary=summary,
                 link=link,
                 sector=feed_info["sector"],
-                source=feed_info["name"]
+                source=feed_name,
             )
 
             seen.add(article_id)
 
-    except Exception as e:
+    except Exception as exc:
+        print(f"[FEED ERROR] {feed_name} -> {exc}")
 
-        print(
-            f"[FEED ERROR] "
-            f"{feed_info['name']} -> {e}"
-        )
-
-
-# ==========================
-# MAIN
-# ==========================
 
 def main():
-
     print("===== OVERWATCH INTEL =====")
 
     if not WEBHOOK_URL:
-
-        print(
-            "WEBHOOK_MAIN secret missing."
-        )
-
+        print("WEBHOOK_MAIN secret missing.")
         return
 
     seen = load_seen()
 
     for feed in FEEDS:
-
-        process_feed(
-            feed,
-            seen
-        )
+        process_feed(feed, seen)
 
     save_seen(seen)
-
-    print(
-        f"Scan completed @ "
-        f"{datetime.now()}"
-    )
+    print(f"Scan completed @ {datetime.now()}")
 
 
 if __name__ == "__main__":
