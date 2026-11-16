@@ -1,189 +1,3 @@
-import os
-import json
-import html
-import re
-from datetime import datetime, timezone
-
-import feedparser
-import requests
-
-# ==========================
-# OVERWATCH INTEL
-# ==========================
-
-WEBHOOK_URL = os.getenv("WEBHOOK_MAIN")
-SEEN_FILE = "seen_alerts.json"
-
-# ==========================
-# FEEDS
-# ==========================
-
-FEEDS = [
-
-    # CYBER INTEL
-
-    {
-        "name": "CISA",
-        "url": "https://www.cisa.gov/cybersecurity-advisories/all.xml",
-        "sector": "Cyber Intel"
-    },
-
-    {
-        "name": "The Hacker News",
-        "url": "https://feeds.feedburner.com/TheHackersNews",
-        "sector": "Cyber Intel"
-    },
-
-    {
-        "name": "BleepingComputer",
-        "url": "https://www.bleepingcomputer.com/feed/",
-        "sector": "Cyber Intel"
-    },
-
-    # NEWS
-
-    {
-        "name": "AP News",
-        "url": "https://feeds.apnews.com/rss/apf-topnews",
-        "sector": "National News"
-    },
-
-    # TRAVEL
-
-    {
-        "name": "State Department",
-        "url": "https://travel.state.gov/content/travel/en/traveladvisories/traveladvisories.rss.xml",
-        "sector": "Travel Risk"
-    },
-
-    # WEATHER
-
-    {
-        "name": "Texas Weather",
-        "url": "https://api.weather.gov/alerts/active.atom?area=TX",
-        "sector": "Weather"
-    },
-
-    {
-        "name": "Virginia Weather",
-        "url": "https://api.weather.gov/alerts/active.atom?area=VA",
-        "sector": "DMV Weather"
-    },
-
-    {
-        "name": "Maryland Weather",
-        "url": "https://api.weather.gov/alerts/active.atom?area=MD",
-        "sector": "DMV Weather"
-    },
-
-    {
-        "name": "DC Weather",
-        "url": "https://api.weather.gov/alerts/active.atom?area=DC",
-        "sector": "DMV Weather"
-    },
-
-    # FEMA
-
-    {
-        "name": "FEMA",
-        "url": "https://www.fema.gov/feeds/press-release.xml",
-        "sector": "Emergency Management"
-    }
-]
-
-# ==========================
-# SEVERITY
-# ==========================
-
-CRITICAL_KEYWORDS = [
-    "active shooter",
-    "ransomware",
-    "zero-day",
-    "active exploitation",
-    "critical vulnerability",
-    "explosion",
-    "chemical release",
-    "hurricane warning",
-    "tornado warning",
-    "evacuation",
-    "missile",
-    "airstrike"
-]
-
-HIGH_KEYWORDS = [
-    "cyberattack",
-    "breach",
-    "exploit",
-    "vulnerability",
-    "flash flood",
-    "severe thunderstorm",
-    "hazmat",
-    "road closure",
-    "ground stop",
-    "ground delay",
-    "outage",
-    "state of emergency"
-]
-
-# ==========================
-# FILE FUNCTIONS
-# ==========================
-
-def load_seen():
-
-    if os.path.exists(SEEN_FILE):
-
-        try:
-
-            with open(SEEN_FILE, "r") as f:
-                return set(json.load(f))
-
-        except Exception:
-            pass
-
-    return set()
-
-
-def save_seen(seen):
-
-    with open(SEEN_FILE, "w") as f:
-        json.dump(list(seen), f, indent=2)
-
-# ==========================
-# CLEAN TEXT
-# ==========================
-
-def clean_text(text):
-
-    if not text:
-        return "No summary available."
-
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = html.unescape(text)
-    text = re.sub(r"\s+", " ", text)
-
-    return text.strip()
-
-# ==========================
-# SEVERITY ENGINE
-# ==========================
-
-def classify_severity(text):
-
-    text = text.lower()
-
-    for keyword in CRITICAL_KEYWORDS:
-
-        if keyword in text:
-            return "🔴 CRITICAL", 15158332
-
-    for keyword in HIGH_KEYWORDS:
-
-        if keyword in text:
-            return "🟠 HIGH", 15105570
-
-    return "🔵 MONITOR", 3447003
-
 # ==========================
 # SOURCE LINKS
 # ==========================
@@ -199,4 +13,193 @@ def determine_link(feed_info, entry):
     ):
         return link
 
-    if "weather.gov" in feed
+    if "weather.gov" in feed_info["url"]:
+        return "https://www.weather.gov/"
+
+    if "cisa.gov" in feed_info["url"]:
+        return "https://www.cisa.gov/"
+
+    if "fema.gov" in feed_info["url"]:
+        return "https://www.fema.gov/"
+
+    return feed_info["url"]
+
+
+# ==========================
+# DISCORD ALERT
+# ==========================
+
+def send_alert(title, summary, link, sector, source):
+
+    severity, color = classify_severity(
+        f"{title} {summary}"
+    )
+
+    summary = clean_text(summary)
+
+    if len(summary) > 1000:
+        summary = summary[:997] + "..."
+
+    payload = {
+        "username": "Overwatch Intel",
+
+        "embeds": [
+            {
+                "title": f"🛰️ {title[:250]}",
+                "url": link,
+                "description": summary,
+                "color": color,
+
+                "fields": [
+                    {
+                        "name": "Severity",
+                        "value": severity,
+                        "inline": True
+                    },
+                    {
+                        "name": "Sector",
+                        "value": sector,
+                        "inline": True
+                    },
+                    {
+                        "name": "Source",
+                        "value": source,
+                        "inline": True
+                    }
+                ],
+
+                "footer": {
+                    "text": "Overwatch Intel • OSINT Monitoring"
+                },
+
+                "timestamp": datetime.now(
+                    timezone.utc
+                ).isoformat()
+            }
+        ]
+    }
+
+    try:
+
+        response = requests.post(
+            WEBHOOK_URL,
+            json=payload,
+            timeout=30
+        )
+
+        if response.status_code in [200, 204]:
+            print(f"[SUCCESS] {source}: {title}")
+
+        else:
+            print(
+                f"[ERROR] Discord returned "
+                f"{response.status_code}"
+            )
+
+    except Exception as e:
+
+        print(
+            f"[WEBHOOK ERROR] {e}"
+        )
+
+
+# ==========================
+# FEED PROCESSING
+# ==========================
+
+def process_feed(feed_info, seen):
+
+    try:
+
+        print(f"[CHECKING] {feed_info['name']}")
+
+        feed = feedparser.parse(
+            feed_info["url"]
+        )
+
+        for entry in feed.entries[:10]:
+
+            article_id = (
+                entry.get("id")
+                or entry.get("link")
+                or entry.get("title")
+            )
+
+            if not article_id:
+                continue
+
+            if article_id in seen:
+                continue
+
+            title = clean_text(
+                entry.get(
+                    "title",
+                    "Untitled Alert"
+                )
+            )
+
+            summary = clean_text(
+                entry.get(
+                    "summary",
+                    "No summary available."
+                )
+            )
+
+            link = determine_link(
+                feed_info,
+                entry
+            )
+
+            send_alert(
+                title=title,
+                summary=summary,
+                link=link,
+                sector=feed_info["sector"],
+                source=feed_info["name"]
+            )
+
+            seen.add(article_id)
+
+    except Exception as e:
+
+        print(
+            f"[FEED ERROR] "
+            f"{feed_info['name']} -> {e}"
+        )
+
+
+# ==========================
+# MAIN
+# ==========================
+
+def main():
+
+    print("===== OVERWATCH INTEL =====")
+
+    if not WEBHOOK_URL:
+
+        print(
+            "WEBHOOK_MAIN secret missing."
+        )
+
+        return
+
+    seen = load_seen()
+
+    for feed in FEEDS:
+
+        process_feed(
+            feed,
+            seen
+        )
+
+    save_seen(seen)
+
+    print(
+        f"Scan completed @ "
+        f"{datetime.now()}"
+    )
+
+
+if __name__ == "__main__":
+    main()
