@@ -32,16 +32,19 @@ FEEDS = [
         "name": "ABC13 Houston Local News",
         "url": "https://abc13.com/feed",
         "sector": "Harris County, Texas",
+        "urgent_only": True,
     },
     {
         "name": "KHOU Houston Local News",
         "url": "https://www.khou.com/feeds/syndication/rss/news/local",
         "sector": "Harris County, Texas",
+        "urgent_only": True,
     },
     {
         "name": "KPRC Houston Local News",
         "url": "https://www.click2houston.com/news/local/houston-news/?outputType=rss",
         "sector": "Harris County, Texas",
+        "urgent_only": True,
     },
     {
         "name": "Montgomery County, MD Government News",
@@ -53,7 +56,60 @@ FEEDS = [
         "url": "https://www2.montgomerycountymd.gov/mcgportalapps/press_RSS.aspx?dept=Police",
         "sector": "Montgomery County, Maryland",
     },
+    {
+        "name": "NPR Business",
+        "url": "https://feeds.npr.org/1006/rss.xml",
+        "sector": "National Business and Infrastructure",
+        "urgent_only": True,
+    },
+    {
+        "name": "NPR Technology",
+        "url": "https://feeds.npr.org/1019/rss.xml",
+        "sector": "National Technology and Cybersecurity",
+        "urgent_only": True,
+    },
+    {
+        "name": "CNBC U.S. Business News",
+        "url": "https://www.cnbc.com/id/10001147/device/rss/rss.html",
+        "sector": "National Business and Infrastructure",
+        "urgent_only": True,
+    },
+    {
+        "name": "CNBC Technology",
+        "url": "https://www.cnbc.com/id/19854910/device/rss/rss.html",
+        "sector": "National Technology and Cybersecurity",
+        "urgent_only": True,
+    },
+    {
+        "name": "CNBC Transportation",
+        "url": "https://www.cnbc.com/id/19854912/device/rss/rss.html",
+        "sector": "National Transportation",
+        "urgent_only": True,
+    },
+    {
+        "name": "AP Top Stories",
+        "url": "https://flipboard.com/@associatedpress/top-stories-u7govdf1z.rss",
+        "sector": "National Breaking News",
+        "urgent_only": True,
+    },
 ]
+
+# News feeds can be noisy. Only forward stories that indicate a significant
+# disruption, safety event, severe weather, or cybersecurity incident.
+URGENT_NEWS_TERMS = re.compile(
+    r"\b(?:"
+    r"outage|service\s+disruption|service\s+down|system\s+(?:failure|outage)|"
+    r"app\s+(?:down|outage)|website\s+(?:down|outage)|online\s+(?:banking|service)\s+(?:down|outage)|"
+    r"ground\s+stop|flights?\s+(?:grounded|cancelled|canceled)|flight\s+disruptions?|"
+    r"widespread\s+(?:delays?|disruption|outage)|nationwide\s+(?:delays?|disruption|outage)|"
+    r"evacuat(?:e|ion)|wildfire|hurricane|tornado|flash\s+flood|severe\s+weather|"
+    r"emergency|explosion|mass\s+shooting|active\s+shooter|critical\s+infrastructure|"
+    r"cyberattack|cyber\s+attack|ransomware|data\s+breach|security\s+breach|"
+    r"recall|boil\s+water|power\s+(?:failure|outage)|utility\s+outage|"
+    r"earthquake|tsunami|hazmat|hazardous\s+materials|public\s+health\s+emergency"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def clean_text(value):
@@ -101,6 +157,12 @@ def classify_severity(text):
         "emergency",
         "severe",
         "danger",
+        "ground stop",
+        "widespread outage",
+        "nationwide outage",
+        "cyberattack",
+        "ransomware",
+        "data breach",
     ]):
         return "High", 0xFF0000
 
@@ -204,6 +266,10 @@ def process_feed(feed_info, seen):
                 raw_summary = summary_detail.get("value") or "No summary available."
 
             summary = clean_text(raw_summary)
+            if feed_info.get("urgent_only") and not URGENT_NEWS_TERMS.search(f"{title} {summary}"):
+                print(f"[SKIP] Non-urgent story from {feed_name}: {title}")
+                continue
+
             link = determine_link(feed_info, entry)
 
             send_alert(
