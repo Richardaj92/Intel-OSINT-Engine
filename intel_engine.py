@@ -94,20 +94,35 @@ FEEDS = [
     },
 ]
 
-# News feeds can be noisy. Only forward stories that indicate a significant
-# disruption, safety event, severe weather, or cybersecurity incident.
+# National and local news feeds can be noisy. Forward stories that indicate
+# significant disruption, safety events, severe weather, or cyber incidents.
 URGENT_NEWS_TERMS = re.compile(
     r"\b(?:"
     r"outage|service\s+disruption|service\s+down|system\s+(?:failure|outage)|"
     r"app\s+(?:down|outage)|website\s+(?:down|outage)|online\s+(?:banking|service)\s+(?:down|outage)|"
     r"ground\s+stop|flights?\s+(?:grounded|cancelled|canceled)|flight\s+disruptions?|"
     r"widespread\s+(?:delays?|disruption|outage)|nationwide\s+(?:delays?|disruption|outage)|"
-    r"evacuat(?:e|ion)|wildfire|hurricane|tornado|flash\s+flood|severe\s+weather|"
+    r"evacuat(?:e|ion)|wildfire|hurricanes?|tornado(?:es)?|flash\s+floods?|"
+    r"severe\s+(?:weather|thunderstorms?)|thunderstorms?|flood(?:ing|ed)?|"
     r"emergency|explosion|mass\s+shooting|active\s+shooter|critical\s+infrastructure|"
     r"cyberattack|cyber\s+attack|ransomware|data\s+breach|security\s+breach|"
     r"recall|boil\s+water|power\s+(?:failure|outage)|utility\s+outage|"
     r"earthquake|tsunami|hazmat|hazardous\s+materials|public\s+health\s+emergency"
     r")\b",
+    re.IGNORECASE,
+)
+
+# Houston-area major highways. A story only qualifies through this rule when
+# it also mentions a closure, crash, or hazardous road condition.
+MAJOR_HIGHWAY_TERMS = re.compile(
+    r"\b(?:I\s*[- ]?\s*10|IH\s*[- ]?\s*10|Interstate\s+10|"
+    r"I\s*[- ]?\s*45|IH\s*[- ]?\s*45|Interstate\s+45)\b",
+    re.IGNORECASE,
+)
+ROAD_INCIDENT_TERMS = re.compile(
+    r"\b(?:clos(?:e|ed|es|ing|ure|ures)|shut\s+down|blocked|"
+    r"crash(?:es)?|accident(?:s)?|collision(?:s)?|overturned|"
+    r"flood(?:ed|ing)|high\s+water|icy|ice|hazardous\s+conditions)\b",
     re.IGNORECASE,
 )
 
@@ -124,6 +139,14 @@ def clean_text(value):
     value = value.replace("\r", " ").replace("\n", " ")
     value = " ".join(value.split())
     return value.strip()
+
+
+def is_urgent_news(title, summary):
+    text = f"{title} {summary}"
+    if URGENT_NEWS_TERMS.search(text):
+        return True
+
+    return bool(MAJOR_HIGHWAY_TERMS.search(text) and ROAD_INCIDENT_TERMS.search(text))
 
 
 def determine_link(feed_info, entry):
@@ -163,6 +186,9 @@ def classify_severity(text):
         "cyberattack",
         "ransomware",
         "data breach",
+        "hurricane",
+        "flash flood",
+        "severe thunderstorm",
     ]):
         return "High", 0xFF0000
 
@@ -174,6 +200,12 @@ def classify_severity(text):
         "hazard",
         "power",
         "wind",
+        "flood",
+        "closed",
+        "closure",
+        "crash",
+        "accident",
+        "blocked",
     ]):
         return "Medium", 0xFF9900
 
@@ -266,7 +298,7 @@ def process_feed(feed_info, seen):
                 raw_summary = summary_detail.get("value") or "No summary available."
 
             summary = clean_text(raw_summary)
-            if feed_info.get("urgent_only") and not URGENT_NEWS_TERMS.search(f"{title} {summary}"):
+            if feed_info.get("urgent_only") and not is_urgent_news(title, summary):
                 print(f"[SKIP] Non-urgent story from {feed_name}: {title}")
                 continue
 
