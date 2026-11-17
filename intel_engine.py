@@ -104,6 +104,8 @@ URGENT_NEWS_TERMS = re.compile(
     r"widespread\s+(?:delays?|disruption|outage)|nationwide\s+(?:delays?|disruption|outage)|"
     r"evacuat(?:e|ion)|wildfire|hurricanes?|tornado(?:es)?|flash\s+floods?|"
     r"severe\s+(?:weather|thunderstorms?)|thunderstorms?|flood(?:ing|ed)?|"
+    r"(?:weather|flood|flash\s+flood|hurricane|tornado|tropical\s+storm|winter\s+storm)\s+"
+    r"(?:advisory|watch|warning)s?|tropical\s+storm|damaging\s+winds?|large\s+hail|"
     r"emergency|explosion|mass\s+shooting|active\s+shooter|critical\s+infrastructure|"
     r"cyberattack|cyber\s+attack|ransomware|data\s+breach|security\s+breach|"
     r"recall|boil\s+water|power\s+(?:failure|outage)|utility\s+outage|"
@@ -112,8 +114,8 @@ URGENT_NEWS_TERMS = re.compile(
     re.IGNORECASE,
 )
 
-# Houston-area major highways. A story only qualifies through this rule when
-# it also mentions a closure, crash, or hazardous road condition.
+# Houston-area major highways. A story qualifies when it mentions an incident
+# or disruption on I-10 or I-45; it does not need to use the word "outage."
 MAJOR_HIGHWAY_TERMS = re.compile(
     r"\b(?:I\s*[- ]?\s*10|IH\s*[- ]?\s*10|Interstate\s+10|"
     r"I\s*[- ]?\s*45|IH\s*[- ]?\s*45|Interstate\s+45)\b",
@@ -122,7 +124,34 @@ MAJOR_HIGHWAY_TERMS = re.compile(
 ROAD_INCIDENT_TERMS = re.compile(
     r"\b(?:clos(?:e|ed|es|ing|ure|ures)|shut\s+down|blocked|"
     r"crash(?:es)?|accident(?:s)?|collision(?:s)?|overturned|"
-    r"flood(?:ed|ing)|high\s+water|icy|ice|hazardous\s+conditions)\b",
+    r"flood(?:ed|ing)|high\s+water|icy|ice|hazardous\s+conditions|"
+    r"lane\s+closures?|ramps?\s+closed|traffic\s+diverted|major\s+delays?)\b",
+    re.IGNORECASE,
+)
+
+# Forward public reporting of significant law-enforcement deployments without
+# treating every routine police mention as urgent. SWAT deployments qualify
+# with an operational action; other agencies require crime context as well.
+LAW_ENFORCEMENT_AGENCIES = re.compile(
+    r"\b(?:SWAT|FBI|Texas\s+Rangers?|police|sheriff(?:'s)?|deput(?:y|ies)|"
+    r"law\s+enforcement|federal\s+agents?)\b",
+    re.IGNORECASE,
+)
+POLICE_OPERATION_TERMS = re.compile(
+    r"\b(?:dispatched|deployed|respond(?:ed|ing)|in\s+the\s+area|"
+    r"on\s+scene|search(?:ing)?|manhunt|standoff|barricaded|"
+    r"serv(?:ing|ed)\s+(?:a\s+)?(?:search\s+)?warrant|"
+    r"execut(?:ing|ed)\s+(?:a\s+)?(?:search\s+)?warrant|"
+    r"tactical\s+operation|law\s+enforcement\s+operation|"
+    r"investigat(?:e|ing|ion)|assisting\s+(?:local\s+)?police|"
+    r"asking\s+the\s+public\s+to\s+(?:avoid|stay\s+away))\b",
+    re.IGNORECASE,
+)
+CRIMINAL_ACTIVITY_TERMS = re.compile(
+    r"\b(?:criminal\s+activity|suspect|shooting|homicide|murder|robbery|"
+    r"kidnap(?:ping|ped)|hostage|violent\s+crime|armed\s+and\s+dangerous|"
+    r"assault|stabbing|burglary|terrorism|bomb\s+threat|drug\s+trafficking|"
+    r"wanted\s+for|fugitive|crime\s+scene|officer\s+involved)\b",
     re.IGNORECASE,
 )
 
@@ -146,7 +175,15 @@ def is_urgent_news(title, summary):
     if URGENT_NEWS_TERMS.search(text):
         return True
 
-    return bool(MAJOR_HIGHWAY_TERMS.search(text) and ROAD_INCIDENT_TERMS.search(text))
+    if MAJOR_HIGHWAY_TERMS.search(text) and ROAD_INCIDENT_TERMS.search(text):
+        return True
+
+    if LAW_ENFORCEMENT_AGENCIES.search(text) and POLICE_OPERATION_TERMS.search(text):
+        is_swat_deployment = re.search(r"\bSWAT\b", text, re.IGNORECASE)
+        if is_swat_deployment or CRIMINAL_ACTIVITY_TERMS.search(text):
+            return True
+
+    return False
 
 
 def determine_link(feed_info, entry):
@@ -189,6 +226,9 @@ def classify_severity(text):
         "hurricane",
         "flash flood",
         "severe thunderstorm",
+        "swat",
+        "standoff",
+        "manhunt",
     ]):
         return "High", 0xFF0000
 
@@ -206,6 +246,9 @@ def classify_severity(text):
         "crash",
         "accident",
         "blocked",
+        "police operation",
+        "deployed",
+        "dispatched",
     ]):
         return "Medium", 0xFF9900
 
