@@ -3,6 +3,7 @@ import os
 import re
 from datetime import datetime, timezone
 from html import unescape
+from urllib.parse import urljoin, urlparse
 
 import feedparser
 import requests
@@ -155,6 +156,12 @@ CRIMINAL_ACTIVITY_TERMS = re.compile(
     re.IGNORECASE,
 )
 
+# Extract image URLs from common RSS/Atom image fields or embedded entry HTML.
+IMAGE_TAG_URL = re.compile(
+    r"<img\b[^>]*?\b(?:src|data-src)\s*=\s*['\"]([^'\"]+)['\"]",
+    re.IGNORECASE,
+)
+
 
 def clean_text(value):
     if value is None:
@@ -204,6 +211,66 @@ def determine_link(feed_info, entry):
         return "https://www.fema.gov/"
 
     return (feed_info or {}).get("url", "")
+
+
+def _image_url(value, base_url):
+    """Return an absolute HTTP(S) image URL, or None for invalid values."""
+    if not isinstance(value, str):
+        return None
+
+    value = unescape(value.strip())
+    if not value:
+        return None
+
+    absolute_url = urljoin(base_url or "", value)
+    if urlparse(absolute_url).scheme.lower() not in {"http", "https"}:
+        return None
+    return absolute_url
+
+
+def extract_thumbnail(entry):
+    """Find an article thumbnail from common RSS/Atom image representations."""
+    base_url = entry.get("link", "")
+    candidates = []
+
+    # Media RSS commonly provides media:thumbnail and media:content fields.
+    for field in ("media_thumbnail", "media_content"):
+        for media in entry.get(field, []) or []:
+            if isinstance(media, dict):
+                candidates.append(media.get("url"))
+
+    # Standard RSS enclosures and Atom links can expose image media types.
+    for enclosure in entry.get("enclosures", []) or []:
+        if isinstance(enclosure, dict):
+            media_type = str(enclosure.get("type", "")).lower()
+            href = enclosure.get("href") or enclosure.get("url")
+            if media_type.startswith("image/") or re.search(
+                r"\.(?:png|jpe?g|gif|webp)(?:$|[?#])", str(href), re.IGNORECASE
+            ):
+                candidates.append(href)
+
+    for item in entry.get("links", []) or []:
+        if isinstance(item, dict):
+            media_type = str(item.get("type", "")).lower()
+            href = item.get("href")
+            if media_type.startswith("image/") or item.get("rel") == "enclosure":
+                candidates.append(href)
+
+    # Some feeds only include the image inside the summary or content HTML.
+    html_values = [entry.get("summary", ""), entry.get("description", "")]
+    for content in entry.get("content", []) or []:
+        if isinstance(content, dict):
+            html_values.append(content.get("value", ""))
+    for html_value in html_values:
+        if isinstance(html_value, str):
+            candidates.extend(IMAGE_TAG_URL.findall(html_value))
+
+    for candidate in candidates:
+        image_url = _image_url(candidate, base_url)
+        if image_url:
+            return image_url
+
+    return None
 
 
 def classify_severity(text):
@@ -276,28 +343,32 @@ def save_seen(seen):
         json.dump(sorted(seen), file, indent=2)
 
 
-def send_alert(title, summary, link, sector, source):
+def send_alert(title, summary, link, sector, source, thumbnail_url=None):
     severity, color = classify_severity(f"{title} {summary}")
     summary = clean_text(summary)
 
     if len(summary) > 1000:
         summary = summary[:997] + "..."
 
+    embed = {
+        "title": f"🛰️ {title[:250]}",
+        "url": link,
+        "description": summary or "No summary available.",
+        "color": color,
+        "fields": [
+            {"name": "Severity", "value": severity, "inline": True},
+            {"name": "Sector", "value": sector, "inline": True},
+            {"name": "Source", "value": source, "inline": True},
+        ],
+        "footer": {"text": "Overwatch Intel • OSINT Monitoring"},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if thumbnail_url:
+        embed["thumbnail"] = {"url": thumbnail_url}
+
     payload = {
         "username": "Overwatch Intel",
-        "embeds": [{
-            "title": f"🛰️ {title[:250]}",
-            "url": link,
-            "description": summary or "No summary available.",
-            "color": color,
-            "fields": [
-                {"name": "Severity", "value": severity, "inline": True},
-                {"name": "Sector", "value": sector, "inline": True},
-                {"name": "Source", "value": source, "inline": True},
-            ],
-            "footer": {"text": "Overwatch Intel • OSINT Monitoring"},
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }],
+        "embeds": [embed],
     }
 
     try:
@@ -346,6 +417,7 @@ def process_feed(feed_info, seen):
                 continue
 
             link = determine_link(feed_info, entry)
+            thumbnail_url = extract_thumbnail(entry)
 
             send_alert(
                 title=title,
@@ -353,6 +425,7 @@ def process_feed(feed_info, seen):
                 link=link,
                 sector=feed_info["sector"],
                 source=feed_name,
+                thumbnail_url=thumbnail_url,
             )
 
             seen.add(article_id)
