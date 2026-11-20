@@ -116,6 +116,22 @@ URGENT_NEWS_TERMS = re.compile(
     re.IGNORECASE,
 )
 
+# Mark reports as live only when the headline/summary signals an event is
+# actively unfolding. This avoids labeling retrospective coverage as live.
+LIVE_EVENT_TERMS = re.compile(
+    r"\b(?:"
+    r"live\s+(?:updates?|coverage|blog)|happening\s+now|right\s+now|"
+    r"under\s+way|underway|ongoing|in\s+progress|developing\s+(?:story|now)|"
+    r"actively\s+(?:responding|searching|pursuing)|"
+    r"(?:police|officers?|authorities|crews|firefighters?)\s+(?:are\s+)?"
+    r"(?:responding|pursuing|chasing|searching|battling)|"
+    r"(?:chase|pursuit|standoff|evacuation|search)\s+(?:is\s+)?(?:under\s+way|underway|ongoing)|"
+    r"shelter\s+in\s+place|active\s+(?:shooter|incident|fire)|"
+    r"breaking\s+(?:news|now|updates?)"
+    r")\b",
+    re.IGNORECASE,
+)
+
 # Police pursuits are frequently reported as chases without describing a
 # collision or road closure. Match explicit pursuit/chase language directly.
 POLICE_CHASE_TERMS = re.compile(
@@ -190,9 +206,14 @@ def clean_text(value):
     return value.strip()
 
 
+def is_live_event(title, summary):
+    """Return whether the text indicates a currently unfolding event."""
+    return bool(LIVE_EVENT_TERMS.search(f"{title} {summary}"))
+
+
 def is_urgent_news(title, summary):
     text = f"{title} {summary}"
-    if URGENT_NEWS_TERMS.search(text) or POLICE_CHASE_TERMS.search(text):
+    if URGENT_NEWS_TERMS.search(text) or POLICE_CHASE_TERMS.search(text) or is_live_event(title, summary):
         return True
 
     if MAJOR_HIGHWAY_TERMS.search(text) and ROAD_INCIDENT_TERMS.search(text):
@@ -366,8 +387,9 @@ def send_alert(title, summary, link, sector, source, thumbnail_url=None):
     if len(summary) > 1000:
         summary = summary[:997] + "..."
 
+    alert_title = f"🔴 LIVE: {title}" if is_live_event(title, summary) else title
     embed = {
-        "title": f"🛰️ {title[:250]}",
+        "title": f"🛰️ {alert_title[:250]}",
         "url": link,
         "description": summary or "No summary available.",
         "color": color,
@@ -391,7 +413,7 @@ def send_alert(title, summary, link, sector, source, thumbnail_url=None):
         response = requests.post(WEBHOOK_URL, json=payload, timeout=30)
 
         if response.status_code in [200, 204]:
-            print(f"[SUCCESS] {source}: {title}")
+            print(f"[SUCCESS] {source}: {alert_title}")
         else:
             print(f"[ERROR] Discord returned {response.status_code} for {source}")
             print(response.text[:500])
