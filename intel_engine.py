@@ -99,6 +99,7 @@ FEEDS = [
 # significant disruption, safety events, severe weather, or cyber incidents.
 URGENT_NEWS_TERMS = re.compile(
     r"\b(?:"
+    r"breaking\s+news|"
     r"outage|service\s+disruption|service\s+down|system\s+(?:failure|outage)|"
     r"app\s+(?:down|outage)|website\s+(?:down|outage)|online\s+(?:banking|service)\s+(?:down|outage)|"
     r"ground\s+stop|flights?\s+(?:grounded|cancelled|canceled)|flight\s+disruptions?|"
@@ -111,6 +112,18 @@ URGENT_NEWS_TERMS = re.compile(
     r"cyberattack|cyber\s+attack|ransomware|data\s+breach|security\s+breach|"
     r"recall|boil\s+water|power\s+(?:failure|outage)|utility\s+outage|"
     r"earthquake|tsunami|hazmat|hazardous\s+materials|public\s+health\s+emergency"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Police pursuits are frequently reported as chases without describing a
+# collision or road closure. Match explicit pursuit/chase language directly.
+POLICE_CHASE_TERMS = re.compile(
+    r"\b(?:"
+    r"(?:police|vehicle|high[- ]speed|I\s*[- ]?\s*10|IH\s*[- ]?\s*10)\s+(?:car\s+)?(?:chase|pursuit)s?|"
+    r"(?:chase|pursuit)s?\s+(?:on|along|down|through|from)|"
+    r"fleeing\s+(?:from\s+)?police|elud(?:e|ed|ing)\s+police|"
+    r"police\s+chasing\s+(?:a\s+)?(?:suspect|driver|vehicle)"
     r")\b",
     re.IGNORECASE,
 )
@@ -179,7 +192,7 @@ def clean_text(value):
 
 def is_urgent_news(title, summary):
     text = f"{title} {summary}"
-    if URGENT_NEWS_TERMS.search(text):
+    if URGENT_NEWS_TERMS.search(text) or POLICE_CHASE_TERMS.search(text):
         return True
 
     if MAJOR_HIGHWAY_TERMS.search(text) and ROAD_INCIDENT_TERMS.search(text):
@@ -296,6 +309,8 @@ def classify_severity(text):
         "swat",
         "standoff",
         "manhunt",
+        "police chase",
+        "pursuit",
     ]):
         return "High", 0xFF0000
 
@@ -316,6 +331,7 @@ def classify_severity(text):
         "police operation",
         "deployed",
         "dispatched",
+        "chase",
     ]):
         return "Medium", 0xFF9900
 
@@ -393,7 +409,7 @@ def process_feed(feed_info, seen):
         feed = feedparser.parse(feed_url)
         print(f"[DEBUG] {feed_name}: found {len(feed.entries)} entries")
 
-        for entry in feed.entries[:10]:
+        for entry in feed.entries[:25]:
             article_id = entry.get("id") or entry.get("link") or entry.get("title")
             if not article_id:
                 continue
